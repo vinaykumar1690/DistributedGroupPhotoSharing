@@ -10,6 +10,8 @@
           <dd><input type=submit value=Share>
         </dl>
       </form>
+    {% else %}
+      Voting for the current Montage has started. Cannot upload new images till voting period ends
     {% endif %}
   {% endif %}
   <div class=montage_state>
@@ -24,9 +26,6 @@
             <input type=submit value=Vote>
           </form>
         {% endif %}
-        <form action="{{ url_for('check_and_commit') }}" method=post class=check_and_commit >
-          <input type=submit value=CheckAndCommit>
-        </form>
       {% endif %}
     {% else %}
       <h4> Sorry, no montage available now </h4>

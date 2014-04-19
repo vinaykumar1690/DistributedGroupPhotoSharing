@@ -11,17 +11,20 @@ import os
 import glob
 import shelve
 import shutil
+import time
 from PIL import Image
 from sqlite3 import dbapi2 as sqlite3
 from flask import Flask, request, session, g, redirect, url_for, abort, \
      render_template, flash, send_from_directory, make_response
 from werkzeug.utils import secure_filename
+from threading import Timer
 
 UPLOAD_FOLDER = os.path.realpath('.') + '/images/'
 MONTAGE_FOLDER = os.path.realpath('.') + '/montages/'
 CURMONTAGE_FOLDER = os.path.realpath('.') + '/curmontage/'
 MONTAGE_FILE = 'tmpmontage.jpg'
 INTENTIONS_DB = 'intentions.db'
+SERVER_LIST = [5000, 5001, 5002]
 
 # create our little application :)
 app = Flask(__name__)
@@ -94,9 +97,8 @@ def make_montage(fnames,(ncols,nrows),(photow,photoh),
 def get_intentions_store():
     """Opens the intentions list from the server filesystem
     """
-    if not hasattr(g, 'intentions_db'):
-        g.intentions_db = shelve.open(os.path.join(app.root_path, INTENTIONS_DB))
-    return g.intentions_db
+    intentions_db = shelve.open(os.path.join(app.root_path, INTENTIONS_DB))
+    return intentions_db
 
 @app.teardown_appcontext
 def close_db(error):
@@ -184,17 +186,25 @@ def vote():
         flash('You have already voted. You cannot change your vote')
         return redirect(url_for('show_entries'))
     if request.method == 'POST':
+        if intentions.has_key('cannot_upload'.encode('ascii','ignore')):
+            if not intentions['cannot_upload'.encode('ascii','ignore')]:
+                intentions['cannot_upload'.encode('ascii','ignore')] = True
+                Timer(60, check_and_commit, ()).start()
+            else:
+                intentions['cannot_upload'.encode('ascii','ignore')] = True
+        else:
+            intentions['cannot_upload'.encode('ascii','ignore')] = True
+            Timer(60, check_and_commit, ()).start()
+
         vote_val = request.form['vote_val']
         if vote_val == 'Yes':
             flash('You voted yes')
-            intentions['cannot_upload'.encode('ascii','ignore')] = True
             intentions[session.get('username').encode('ascii','ignore')] = True
             intentions.sync()
             session['cannot_upload'] = True
             session['cannot_vote'] = True
         elif vote_val == 'No':
             flash('You voted no')
-            intentions['cannot_upload'.encode('ascii','ignore')] = True
             intentions[session.get('username').encode('ascii','ignore')] = False
             intentions.sync()
             session['cannot_upload'] = True
@@ -203,16 +213,10 @@ def vote():
     response = app.make_response(redirect_to_index)
     return response
 
-@app.route('/checkcommit', methods=['POST'])
 def check_and_commit():
     intentions = get_intentions_store()
     can_commit = True
     users = []
-
-    if not session.get('logged_in'):
-        abort(401)
-    if request.method == 'POST':
-        flash('check_and_commit')
 
     if intentions.has_key('user_list'):
         users = intentions['user_list']
@@ -227,18 +231,15 @@ def check_and_commit():
             can_commit = False
 
     if can_commit:
-        flash('Proceeding with commit')
         if intentions.has_key('montage_version'.encode('ascii','ignore')):
-            g.montage_version = intentions['montage_version']+1
+            montage_version = intentions['montage_version']+1
         else:
-            g.montage_version = 1
+            montage_version = 1
 
-        intentions['montage_version'] = g.montage_version
+        intentions['montage_version'] = montage_version
 
         shutil.copy2(os.path.join(app.config['CURMONTAGE_FOLDER'], MONTAGE_FILE), 
-            os.path.join('./montages/', str(g.montage_version)+'.jpg') )
-    else:
-        flash('Discarding montage')
+            os.path.join('./montages/', str(montage_version)+'.jpg') )
 
     for user in users:
         intentions[user.encode('ascii', 'ignore')] = False
@@ -246,9 +247,6 @@ def check_and_commit():
     intentions['cannot_upload'] = False
     intentions.sync()
 
-    session['cannot_upload'] = False
-    session['cannot_vote'] = False
-    return redirect(url_for('show_entries'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -297,4 +295,4 @@ if __name__ == '__main__':
     check_and_createdir(app.config['UPLOAD_FOLDER'])
     check_and_createdir(app.config['MONTAGE_FOLDER'])
     check_and_createdir(app.config['CURMONTAGE_FOLDER'])
-    app.run(host='0.0.0.0')
+    app.run(host='0.0.0.0', port=5000)
