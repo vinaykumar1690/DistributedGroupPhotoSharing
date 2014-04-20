@@ -130,11 +130,14 @@ def show_entries():
         g.up_to_date = False
 
     if not g.up_to_date and not my_port == master_port:
+        my_file_list = os.listdir('./images')
         url_get_image = 'http://localhost:'+str(master_port)+'/get_image'
         url_list_image = 'http://localhost:'+str(master_port)+'/list_image'
         r = requests.get(url_list_image)
         resp_json = r.json()
         for filename in resp_json['file_list']:
+            if filename in my_file_list:
+                continue
             payload = { 'filename': filename }
             r = requests.get(url_get_image, params=payload)
             img = Image.open(StringIO(r.content))
@@ -191,12 +194,7 @@ def add_entry():
         file = request.files['photo']
         filename = secure_filename(file.filename)
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        for port in SERVER_LIST:
-            if not port == my_port:
-                try:
-                    send_image(os.path.join(app.config['UPLOAD_FOLDER'], filename), port)
-                except requests.exceptions.RequestException:
-                    continue
+        send_image(os.path.join(app.config['UPLOAD_FOLDER'], filename), master_port)
         flash('Photo Saved')
     else:
         if not can_add:
@@ -337,6 +335,13 @@ def post_image():
     response.status_code = 200
     return response
 
+@app.route('/set_dirty', methods=['POST'])
+def set_dirty():
+    g.up_to_date = False
+    response = app.make_response('')
+    response.status_code = 200
+    return response
+
 @app.route('/list_image', methods=['GET'])
 def list_image():
     file_list = os.listdir(os.path.realpath('.')+'\images')
@@ -348,10 +353,26 @@ def get_image():
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 def send_image(image, port):
+    global my_port
+    if port == my_port:
+        return
+
     url = 'http://localhost:'+str(port)+'/post_image'
     files = {'file': open(image, 'rb')}
-    r = requests.post(url, files=files)
-    return r.status_code
+    try:
+        r = requests.post(url, files=files)
+    except requests.exceptions.RequestException:
+        flash('Server at port' +str(port)+' is down. Cannot send the image')
+
+    for sport in SERVER_LIST:
+        if sport == my_port or sport == master_port:
+            continue
+        url = 'http://localhost:'+str(sport)+'/set_dirty'
+        try:
+            requests.post(url)
+        except requests.exceptions.RequestException:
+            flash('Server at port' +str(sport)+' is down. Cannot update dirty flag')
+    return
 
 def check_and_createdir(path):
     dir = os.path.dirname(path)
