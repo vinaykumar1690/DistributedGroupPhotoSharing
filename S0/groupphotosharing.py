@@ -13,10 +13,13 @@ import shelve
 import shutil
 import time
 import requests
+import json
 from PIL import Image
+from StringIO import StringIO
 from sqlite3 import dbapi2 as sqlite3
 from flask import Flask, request, session, g, redirect, url_for, abort, \
-     render_template, flash, send_from_directory, make_response
+     render_template, flash, send_from_directory, make_response, jsonify, \
+     send_file
 from werkzeug.utils import secure_filename
 from threading import Timer
 
@@ -26,6 +29,8 @@ CURMONTAGE_FOLDER = os.path.realpath('.') + '/curmontage/'
 MONTAGE_FILE = 'tmpmontage.jpg'
 INTENTIONS_DB = 'intentions.db'
 SERVER_LIST = [7000, 7001, 7002]
+my_port = 7000
+master_port = 7000
 
 # create our little application :)
 app = Flask(__name__)
@@ -121,6 +126,21 @@ def curmontage_file(filename):
 
 @app.route('/')
 def show_entries():
+    if not hasattr(g, 'up_to_date'):
+        g.up_to_date = False
+
+    if not g.up_to_date and not my_port == master_port:
+        url_get_image = 'http://localhost:'+str(master_port)+'/get_image'
+        url_list_image = 'http://localhost:'+str(master_port)+'/list_image'
+        r = requests.get(url_list_image)
+        resp_json = r.json()
+        for filename in resp_json['file_list']:
+            payload = { 'filename': filename }
+            r = requests.get(url_get_image, params=payload)
+            img = Image.open(StringIO(r.content))
+            img.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        g.up_to_date = True
+
     if 'username' in request.cookies:
         session['logged_in'] = True
         session['username'] = request.cookies.get('username')
@@ -158,6 +178,7 @@ def show_entries():
 
 @app.route('/add', methods=['POST'])
 def add_entry():
+    global my_port
     intentions = get_intentions_store()
     if not session.get('logged_in'):
         abort(401)
@@ -170,12 +191,19 @@ def add_entry():
         file = request.files['photo']
         filename = secure_filename(file.filename)
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        for port in SERVER_LIST:
+            if not port == my_port:
+                try:
+                    send_image(os.path.join(app.config['UPLOAD_FOLDER'], filename), port)
+                except requests.exceptions.RequestException:
+                    continue
         flash('Photo Saved')
     else:
         if not can_add:
             flash('Voting has begun. You cannot upload till voting is done')
         else:
             flash('No photo found in request')
+
     return redirect(url_for('show_entries'))
 
 @app.route('/vote', methods=['POST'])
@@ -309,11 +337,21 @@ def post_image():
     response.status_code = 200
     return response
 
+@app.route('/list_image', methods=['GET'])
+def list_image():
+    file_list = os.listdir(os.path.realpath('.')+'\images')
+    return jsonify(file_list=file_list)
 
-def send_image(file):
-    url = 'http://localhost:5000/post_image'
-    files = {'file': open(file, 'rb')}
+@app.route('/get_image', methods=['GET'])
+def get_image():
+    filename = request.args.get('filename')
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+def send_image(image, port):
+    url = 'http://localhost:'+str(port)+'/post_image'
+    files = {'file': open(image, 'rb')}
     r = requests.post(url, files=files)
+    return r.status_code
 
 def check_and_createdir(path):
     dir = os.path.dirname(path)
@@ -325,4 +363,6 @@ if __name__ == '__main__':
     check_and_createdir(app.config['MONTAGE_FOLDER'])
     check_and_createdir(app.config['CURMONTAGE_FOLDER'])
     check_and_commit()
-    app.run(host='0.0.0.0', port=7000)
+    global my_port
+    global master_port
+    app.run(host='0.0.0.0', port=my_port)
