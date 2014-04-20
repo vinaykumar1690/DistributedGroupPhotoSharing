@@ -12,6 +12,7 @@ import glob
 import shelve
 import shutil
 import time
+import requests
 from PIL import Image
 from sqlite3 import dbapi2 as sqlite3
 from flask import Flask, request, session, g, redirect, url_for, abort, \
@@ -24,7 +25,7 @@ MONTAGE_FOLDER = os.path.realpath('.') + '/montages/'
 CURMONTAGE_FOLDER = os.path.realpath('.') + '/curmontage/'
 MONTAGE_FILE = 'tmpmontage.jpg'
 INTENTIONS_DB = 'intentions.db'
-SERVER_LIST = [5000, 5001, 5002]
+SERVER_LIST = [7000, 7001, 7002]
 
 # create our little application :)
 app = Flask(__name__)
@@ -189,11 +190,14 @@ def vote():
         if intentions.has_key('cannot_upload'.encode('ascii','ignore')):
             if not intentions['cannot_upload'.encode('ascii','ignore')]:
                 intentions['cannot_upload'.encode('ascii','ignore')] = True
+                intentions.sync()
                 Timer(60, check_and_commit, ()).start()
             else:
                 intentions['cannot_upload'.encode('ascii','ignore')] = True
+                intentions.sync()
         else:
             intentions['cannot_upload'.encode('ascii','ignore')] = True
+            intentions.sync()
             Timer(60, check_and_commit, ()).start()
 
         vote_val = request.form['vote_val']
@@ -213,15 +217,17 @@ def vote():
     response = app.make_response(redirect_to_index)
     return response
 
+@app.route('/check_and_commit', methods=['GET', 'POST'])
 def check_and_commit():
     intentions = get_intentions_store()
     can_commit = True
     users = []
 
+    if not os.path.isfile(os.path.join(app.config['CURMONTAGE_FOLDER'], MONTAGE_FILE)):
+        return
+
     if intentions.has_key('user_list'):
         users = intentions['user_list']
-    else:
-        users.append(session.get('username'))
 
     for user in users:
         if intentions.has_key(user.encode('ascii', 'ignore')):
@@ -240,6 +246,14 @@ def check_and_commit():
 
         shutil.copy2(os.path.join(app.config['CURMONTAGE_FOLDER'], MONTAGE_FILE), 
             os.path.join('./montages/', str(montage_version)+'.jpg') )
+
+        files1 = glob.glob(os.path.realpath('.')+'\images\*.*')
+        for f in files1:
+            os.remove(f)
+
+        files2 = glob.glob(os.path.realpath('.')+'\curmontage\*.*')
+        for f in files2:
+            os.remove(f)
 
     for user in users:
         intentions[user.encode('ascii', 'ignore')] = False
@@ -286,6 +300,21 @@ def logout():
     response.set_cookie('username', expires=0)
     return response
 
+@app.route('/post_image', methods=['POST'])
+def post_image():
+    file = request.files['file']
+    filename = secure_filename(file.filename)
+    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+    response = app.make_response('')
+    response.status_code = 200
+    return response
+
+
+def send_image(file):
+    url = 'http://localhost:5000/post_image'
+    files = {'file': open(file, 'rb')}
+    r = requests.post(url, files=files)
+
 def check_and_createdir(path):
     dir = os.path.dirname(path)
     if not os.path.exists(dir):
@@ -295,4 +324,5 @@ if __name__ == '__main__':
     check_and_createdir(app.config['UPLOAD_FOLDER'])
     check_and_createdir(app.config['MONTAGE_FOLDER'])
     check_and_createdir(app.config['CURMONTAGE_FOLDER'])
-    app.run(host='0.0.0.0', port=5000)
+    check_and_commit()
+    app.run(host='0.0.0.0', port=7000)

@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+{% block body %}
+  {% if session.logged_in %}
+    <h4> Hi, {{ session.username}} </h4>
+    {% if not session.cannot_upload %}
+      <form action="{{ url_for('add_entry') }}" method=post class=add-entry enctype=multipart/form-data>
+        <dl>
+          <dt>Upload Image File:
+          <dd><input type="file" accept="image/*" id="capture" name="photo">
+          <dd><input type=submit value=Share>
+        </dl>
+      </form>
+    {% else %}
+      Voting for the current Montage has started. Cannot upload new images till voting period ends
+    {% endif %}
+  {% endif %}
+  <div class=montage_state>
+    <h2> The current montage is </h2>
+    {% if montage_state %}
+      <img src="{{ url_for('curmontage_file', filename='tmpmontage.jpg')  }}" height="200" width="200" /> <br>
+      {% if session.logged_in %}
+        {% if not session.cannot_vote %}
+          <form action="{{ url_for('vote') }}" method=post class=vote >
+            <input type="radio" name="vote_val" value="Yes">Yes
+            <input type="radio" name="vote_val" value="No">No
+            <input type=submit value=Vote>
+          </form>
+        {% endif %}
+      {% endif %}
+    {% else %}
+      <h4> Sorry, no montage available now </h4>
+    {% endif %}
+  </div>
+  <div class=publishedmontages>
+    <h2> The Published montages are </h2> <br>
+    {% for file in publishedmontages %}
+      <img src="{{ url_for('montage_file', filename=file) }}" height="100" width="100" />
+    {% else %}
+      <h4>Unbelievable.  No montage here so far</h4>
+    {% endfor %}
+  </div>
+{% endblock %}
