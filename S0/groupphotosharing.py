@@ -14,14 +14,15 @@ import shutil
 import time
 import requests
 import json
+import threading
 from PIL import Image
 from StringIO import StringIO
 from sqlite3 import dbapi2 as sqlite3
 from flask import Flask, request, session, g, redirect, url_for, abort, \
      render_template, flash, send_from_directory, make_response, jsonify, \
-     send_file
+     send_file, copy_current_request_context
 from werkzeug.utils import secure_filename
-from threading import Timer
+"""from threading import Timer"""
 
 UPLOAD_FOLDER = os.path.realpath('.') + '/images/'
 MONTAGE_FOLDER = os.path.realpath('.') + '/montages/'
@@ -255,10 +256,15 @@ def vote():
                 intentions['cannot_upload'.encode('ascii','ignore')] = True
                 intentions.sync()
                 if my_port == master_port:
-                    Timer(60, collect_votes, ()).start()
+                    threading.Thread(target=collect_votes).start()
                 else:
-                    url = 'http://localhost:'+str(master_port)+'/start_vote'
-                    resp = requests.post(url)
+                    for port in SERVER_LIST:
+                        if not port == my_port:
+                            url = 'http://localhost:'+str(port)+'/start_vote'
+                            try:
+                                resp = requests.post(url)
+                            except requests.exceptions.RequestException:
+                                continue
             else:
                 intentions['cannot_upload'.encode('ascii','ignore')] = True
                 intentions.sync()
@@ -266,10 +272,15 @@ def vote():
             intentions['cannot_upload'.encode('ascii','ignore')] = True
             intentions.sync()
             if my_port == master_port:
-                Timer(60, collect_votes, ()).start()
+                threading.Thread(target=collect_votes).start()
             else:
-                url = 'http://localhost:'+str(master_port)+'/start_vote'
-                resp = requests.post(url)
+                for port in SERVER_LIST:
+                    if not port == my_port:
+                        url = 'http://localhost:'+str(port)+'/start_vote'
+                        try:
+                            resp = requests.post(url)
+                        except requests.exceptions.RequestException:
+                            continue
 
         vote_val = request.form['vote_val']
         if vote_val == 'Yes':
@@ -288,8 +299,12 @@ def vote():
     response = app.make_response(redirect_to_index)
     return response
 
+"""@copy_current_request_context"""
 def collect_votes():
     global my_port
+    print 'collect_votes before sleep'
+    time.sleep(60)
+    print 'collect_votes after sleep'
     can_commit = True
     intentions = get_intentions_store()
 
@@ -299,7 +314,6 @@ def collect_votes():
             try:
                 resp = requests.post(url)
             except requests.exceptions.RequestException:
-                flash('Server at port' +str(port)+' is down. Cannot get votes')
                 continue
             resp_json = resp.json()
             if not resp_json['can_commit']:
@@ -318,12 +332,12 @@ def collect_votes():
     check_and_commit(can_commit)
     for port in SERVER_LIST:
         if not port == my_port:
-            url = 'http://localhost'+str(port)+'/commit'
+            url = 'http://localhost:'+str(port)+'/commit'
             payload = {'can_commit':can_commit}
             try:
                 requests.get(url, params=payload)
             except requests.exceptions.RequestException:
-                flash('Server at port' +str(sport)+' is down. Cannot send commit message')
+                continue
 
 
 @app.route('/check_and_commit', methods=['GET', 'POST'])
@@ -331,11 +345,12 @@ def check_and_commit(can_commit):
     intentions = get_intentions_store()
     can_commit = True
     users = []
+    print 'check_and_commit 1'
 
     if not os.path.isfile(os.path.join(app.config['CURMONTAGE_FOLDER'], MONTAGE_FILE)):
         return
-
     if can_commit:
+        print 'check_and_commit 2'  
         if intentions.has_key('montage_version'.encode('ascii','ignore')):
             montage_version = intentions['montage_version']+1
         else:
@@ -354,6 +369,7 @@ def check_and_commit(can_commit):
         for f in files2:
             os.remove(f)
 
+    users = intentions['user_list'.encode('ascii','ignore')]
     for user in users:
         intentions[user.encode('ascii', 'ignore')] = False
 
@@ -417,11 +433,16 @@ def set_dirty():
 
 @app.route('/start_vote', methods=['POST'])
 def start_vote():
+    global my_port
+    global master_port
     intentions = get_intentions_store()
-    if not intentions['cannot_upload']:
+    if not intentions['cannot_upload'] and my_port == master_port:
         intentions['cannot_upload'.encode('ascii','ignore')] = True
         intentions.sync()
-        Timer(60, collect_votes, ()).start()
+        threading.Thread(target=collect_votes).start()
+    else:
+        intentions['cannot_upload'.encode('ascii','ignore')] = True
+        intentions.sync()
     response = app.make_response('')
     response.status_code = 200
     return response
