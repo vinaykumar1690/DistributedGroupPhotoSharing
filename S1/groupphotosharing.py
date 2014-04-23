@@ -127,6 +127,8 @@ def curmontage_file(filename):
 
 @app.route('/')
 def show_entries():
+    global my_port
+    global master_port
 
     if 'username' in request.cookies:
         session['logged_in'] = True
@@ -149,32 +151,54 @@ def show_entries():
             session['cannot_vote'] = False
             intentions['cannot_upload'] = False
 
+    """
     if not hasattr(g, 'up_to_date'):
         g.up_to_date = False
+        if my_port == master_port:
+            if intentions['cannot_upload']:
+                threading.Thread(target=collect_votes).start()
+        url = 'http://localhost:'+str(master_port)+'/get_montage_version'
+        try:
+            resp = requests.get(url)
+            resp_json = resp.json()
+            if not intentions.has_key('montage_version'):
+                intentions['montage_version'] = 1
+            if intentions['montage_version'] > resp_json['montage_version']:
+                url = 'http://localhost:'+str(master_port)+'/list_montages'
+                resp = requests.get(url)
+                resp_json = resp.json()
+                my_file_list = os.listdir('./montages')
+                for filename in resp_json['file_list']:
+                    if filename in my_file_list:
+                        continue
+                    url_get_image = 'http://localhost:'+str(master_port)+'/get_montage_image'
+                    payload = {'filename':filename}
+                    r = requests.get(url_get_image, params=payload)
+                    img = Image.open(StringIO(r.content))
+                    img.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
-    if not g.up_to_date and not my_port == master_port:
+        except requests.exceptions.RequestException:
+            print 'request exception at get_montage_version'
+        """
+    if not my_port == master_port:
         my_file_list = os.listdir('./images')
         url_get_image = 'http://localhost:'+str(master_port)+'/get_image'
         url_list_image = 'http://localhost:'+str(master_port)+'/list_image'
-        r = requests.get(url_list_image)
+        try:
+            r = requests.get(url_list_image)
+        except requests.exceptions.RequestException:
+            flash('OMG, Master server is down')
         resp_json = r.json()
         for filename in resp_json['file_list']:
             if filename in my_file_list:
                 continue
             payload = { 'filename': filename }
-            r = requests.get(url_get_image, params=payload)
-            img = Image.open(StringIO(r.content))
-            img.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-
-        url = 'http://localhost:'+str(master_port)+'/get_cannot_upload'
-        try:
-            resp = requests.post(url)
-            resp_json = resp.json()
-            intentions['cannot_upload'] = resp_json['cannot_upload']
-        except requests.exceptions.RequestException:
-            flash('OMG, master server is down!')
-
-        g.up_to_date = True
+            try:
+                r = requests.get(url_get_image, params=payload)
+                img = Image.open(StringIO(r.content))
+                img.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            except requests.exceptions.RequestException:
+                flash('OMG, Master server is down')
 
     current_montage_available=False
     ncols,nrows = 3,4
@@ -203,6 +227,7 @@ def add_entry():
     if not session.get('logged_in'):
         abort(401)
 
+    
     if not my_port == master_port:
         url = 'http://localhost:'+str(master_port)+'/get_cannot_upload'
         try:
@@ -211,6 +236,7 @@ def add_entry():
             intentions['cannot_upload'] = resp_json['cannot_upload']
         except requests.exceptions.RequestException:
             flash('OMG, master server is down!')
+    
 
     can_add = True
     if intentions.has_key('cannot_upload'.encode('ascii','ignore')):
@@ -221,7 +247,14 @@ def add_entry():
         filename = secure_filename(file.filename)
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         if not my_port == master_port:
-            send_image(os.path.join(app.config['UPLOAD_FOLDER'], filename), master_port)
+            """send_image(os.path.join(app.config['UPLOAD_FOLDER'], filename), master_port)"""
+            url = 'http://localhost:'+str(master_port)+'/post_image'
+            files = {'file': open(os.path.join(app.config['UPLOAD_FOLDER'], filename), 'rb')}
+            try:
+                r = requests.post(url, files=files)
+            except requests.exceptions.RequestException:
+                flash('Server at port' +str(port)+' is down. Cannot send the image')
+        """
         else:
             for port in SERVER_LIST:
                 if not port == my_port and not port == master_port:
@@ -230,6 +263,7 @@ def add_entry():
                         requests.post(url)
                     except requests.exceptions.RequestException:
                         flash('Server at port' +str(port)+' is down. Cannot update dirty flag')
+        """
         flash('Photo Saved')
     else:
         if not can_add:
@@ -258,13 +292,11 @@ def vote():
                 if my_port == master_port:
                     threading.Thread(target=collect_votes).start()
                 else:
-                    for port in SERVER_LIST:
-                        if not port == my_port:
-                            url = 'http://localhost:'+str(port)+'/start_vote'
-                            try:
-                                resp = requests.post(url)
-                            except requests.exceptions.RequestException:
-                                continue
+                    url = 'http://localhost:'+str(master_port)+'/start_vote'
+                    try:
+                        resp = requests.post(url)
+                    except requests.exceptions.RequestException:
+                        flash('OMG, Master server is down')
             else:
                 intentions['cannot_upload'.encode('ascii','ignore')] = True
                 intentions.sync()
@@ -303,7 +335,7 @@ def vote():
 def collect_votes():
     global my_port
     print 'collect_votes before sleep'
-    time.sleep(60)
+    time.sleep(90)
     print 'collect_votes after sleep'
     can_commit = True
     intentions = get_intentions_store()
@@ -319,15 +351,21 @@ def collect_votes():
             if not resp_json['can_commit']:
                 can_commit = False
         else:
-            if intentions.has_key('user_list'):
-                users = intentions['user_list']
+            continue
 
-            for user in users:
-                if intentions.has_key(user.encode('ascii', 'ignore')):
-                    if not intentions[user.encode('ascii', 'ignore')]:
-                        can_commit = False
-                else:
-                    can_commit = False
+    if intentions.has_key('user_list'):
+        users = intentions['user_list']
+    else:
+        users = []
+        users.append(session['username'])
+        intentions['user_list'] = users
+
+    for user in users:
+        if intentions.has_key(user.encode('ascii', 'ignore')):
+            if not intentions[user.encode('ascii', 'ignore')]:
+                can_commit = False
+        else:
+            can_commit = False
     
     check_and_commit(can_commit)
     for port in SERVER_LIST:
@@ -460,6 +498,25 @@ def list_image():
     file_list = os.listdir(os.path.realpath('.')+'\images')
     return jsonify(file_list=file_list)
 
+@app.route('/list_montages', methods=['GET', 'POST'])
+def list_montages():
+    file_list = os.listdir(os.path.realpath('.')+'\montages')
+    return jsonify(file_list=file_list)
+
+@app.route('/get_montage_version', methods=['GET', 'POST'])
+def get_montage_version():
+    intentions = get_intentions_store()
+    if intentions.has_key('montage_version'):
+        montage_version = intentions['montage_version']
+    else:
+        montage_version = 1
+    return jsonify(montage_version=montage_version)
+
+@app.route('/get_montage_image', methods=['GET'])
+def get_montage_image():
+    filename = request.args.get('filename')
+    return send_from_directory(app.config['MONTAGE_FOLDER'], filename)
+
 @app.route('/get_image', methods=['GET'])
 def get_image():
     filename = request.args.get('filename')
@@ -502,6 +559,7 @@ def send_image(image, port):
     except requests.exceptions.RequestException:
         flash('Server at port' +str(port)+' is down. Cannot send the image')
 
+    """
     for sport in SERVER_LIST:
         if sport == my_port or sport == master_port:
             continue
@@ -510,6 +568,7 @@ def send_image(image, port):
             requests.post(url)
         except requests.exceptions.RequestException:
             flash('Server at port' +str(sport)+' is down. Cannot update dirty flag')
+    """
     return
 
 def check_and_createdir(path):
@@ -523,4 +582,8 @@ if __name__ == '__main__':
     check_and_createdir(app.config['CURMONTAGE_FOLDER'])
     global my_port
     global master_port
+    intentions = get_intentions_store()
+    if intentions.has_key('cannot_upload') and my_port == master_port:
+        if intentions['cannot_upload']:
+            threading.Thread(target=collect_votes).start()
     app.run(host='0.0.0.0', port=my_port)
